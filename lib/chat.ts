@@ -1,110 +1,141 @@
 import {
   collection,
-  addDoc,
   doc,
+  addDoc,
   setDoc,
   query,
+  where,
   orderBy,
   onSnapshot,
   serverTimestamp,
   Timestamp,
   Unsubscribe,
+  getDocs,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import { Message, Chat } from "./types";
+import { Conversation, Message } from "./types";
 
-// ─── Conversations ────────────────────────────────────────────────
+// ─── Conversations ─────────────────────────────────────────────────────────
 
+// Listen to all conversations the current user is part of
 export function subscribeToConversations(
   uid: string,
-  callback: (chats: Chat[]) => void
+  callback: (conversations: Conversation[]) => void
 ): Unsubscribe {
   const q = query(
-    collection(db, "users", uid, "conversations"),
-    orderBy("updatedAt", "desc")
+    collection(db, "conversations"),
+    where("participants", "array-contains", uid),
+    orderBy("lastMessageAt", "desc")
   );
+
   return onSnapshot(q, (snapshot) => {
-    const chats = snapshot.docs.map((d) => ({
+    const conversations = snapshot.docs.map((d) => ({
       id: d.id,
       ...d.data(),
-    })) as Chat[];
-    callback(chats);
+    })) as Conversation[];
+    callback(conversations);
   });
 }
 
-export async function createConversation(
-  uid: string,
-  chatId: string,
-  name: string
-): Promise<void> {
-  await setDoc(doc(db, "users", uid, "conversations", chatId), {
-    name,
-    preview: "",
-    updatedAt: serverTimestamp(),
+// Find existing conversation between two users or create a new one
+export async function getOrCreateConversation(
+  myUid: string,
+  myName: string,
+  myPhoto: string,
+  theirUid: string,
+  theirName: string,
+  theirPhoto: string
+): Promise<string> {
+  // Check if conversation already exists
+  const q = query(
+    collection(db, "conversations"),
+    where("participants", "array-contains", myUid)
+  );
+
+  const snap = await getDocs(q);
+  const existing = snap.docs.find((d) => {
+    const data = d.data();
+    return data.participants.includes(theirUid);
   });
-}
 
-// ─── Messages ─────────────────────────────────────────────────────
+  if (existing) return existing.id;
 
-export async function sendMessage(
-  chatId: string,
-  senderId: string,
-  content: string
-): Promise<void> {
-  await addDoc(collection(db, "chats", chatId, "messages"), {
-    chatId,
-    senderId,
-    type: "text",
-    content,
-    clientAt: Timestamp.now(),
+  // Create new conversation
+  const ref = await addDoc(collection(db, "conversations"), {
+    participants: [myUid, theirUid],
+    participantNames: { [myUid]: myName, [theirUid]: theirName },
+    participantPhotos: { [myUid]: myPhoto, [theirUid]: theirPhoto },
+    lastMessage: "",
+    lastMessageAt: null,
     createdAt: serverTimestamp(),
   });
 
-  // Update preview on sender's conversation entry
+  return ref.id;
+}
+
+// ─── Messages ──────────────────────────────────────────────────────────────
+
+// Listen to messages in a conversation in real-time
+export function subscribeToMessages(
+  conversationId: string,
+  callback: (messages: Message[]) => void
+): Unsubscribe {
+  const q = query(
+    collection(db, "conversations", conversationId, "messages"),
+    orderBy("createdAt", "asc")
+  );
+
+  return onSnapshot(q, (snapshot) => {
+    const messages = snapshot.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+    })) as Message[];
+    callback(messages);
+  });
+}
+
+// Send a text message
+export async function sendMessage(
+  conversationId: string,
+  senderId: string,
+  content: string
+): Promise<void> {
+  const now = serverTimestamp();
+
+  await addDoc(collection(db, "conversations", conversationId, "messages"), {
+    senderId,
+    type: "text",
+    content,
+    createdAt: now,
+  });
+
+  // Update conversation's last message
   await setDoc(
-    doc(db, "users", senderId, "conversations", chatId),
-    { preview: content, updatedAt: serverTimestamp() },
+    doc(db, "conversations", conversationId),
+    { lastMessage: content, lastMessageAt: Timestamp.now() },
     { merge: true }
   );
 }
 
+// Send an image message
 export async function sendImageMessage(
-  chatId: string,
+  conversationId: string,
   senderId: string,
   imageUrl: string
 ): Promise<void> {
-  await addDoc(collection(db, "chats", chatId, "messages"), {
-    chatId,
+  const now = serverTimestamp();
+
+  await addDoc(collection(db, "conversations", conversationId, "messages"), {
     senderId,
     type: "image",
     content: "",
     imageUrl,
-    clientAt: Timestamp.now(),
-    createdAt: serverTimestamp(),
+    createdAt: now,
   });
 
   await setDoc(
-    doc(db, "users", senderId, "conversations", chatId),
-    { preview: "📷 Image", updatedAt: serverTimestamp() },
+    doc(db, "conversations", conversationId),
+    { lastMessage: "📷 Image", lastMessageAt: Timestamp.now() },
     { merge: true }
   );
-}
-
-export function subscribeToMessages(
-  chatId: string,
-  callback: (messages: Message[]) => void
-): Unsubscribe {
-  // Order by clientAt — always present, even before serverTimestamp resolves
-  const q = query(
-    collection(db, "chats", chatId, "messages"),
-    orderBy("clientAt", "asc")
-  );
-
-  return onSnapshot(q, (snapshot) => {
-    const messages = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    })) as Message[];
-    callback(messages);
-  });
 }

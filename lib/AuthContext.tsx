@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState } from "react";
-import { onAuthStateChanged, User } from "firebase/auth";
+import { onAuthStateChanged, getRedirectResult, User } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { saveUserProfile } from "@/lib/user";
 
@@ -17,14 +17,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
-      if (u) {
-        saveUserProfile(u.uid, u.phoneNumber, u.displayName, u.email);
-      }
-    });
-    return () => unsub();
+    let unsub: () => void;
+
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result?.user) {
+          const u = result.user;
+          saveUserProfile(
+            u.uid,
+            u.displayName ?? "Unknown",
+            u.email ?? "",
+            u.photoURL
+          );
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        unsub = onAuthStateChanged(auth, (u) => {
+          setUser(u);
+          setLoading(false);
+          if (u) {
+            saveUserProfile(
+              u.uid,
+              u.displayName ?? "Unknown",
+              u.email ?? "",
+              u.photoURL
+            );
+          }
+        });
+      });
+
+    return () => unsub?.();
   }, []);
 
   return (
