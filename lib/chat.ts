@@ -22,17 +22,21 @@ export function subscribeToConversations(
   uid: string,
   callback: (conversations: Conversation[]) => void
 ): Unsubscribe {
+  // Only filter by participants — no orderBy to avoid composite index requirement
   const q = query(
     collection(db, "conversations"),
-    where("participants", "array-contains", uid),
-    orderBy("lastMessageAt", "desc")
+    where("participants", "array-contains", uid)
   );
 
   return onSnapshot(q, (snapshot) => {
-    const conversations = snapshot.docs.map((d) => ({
-      id: d.id,
-      ...d.data(),
-    })) as Conversation[];
+    const conversations = snapshot.docs
+      .map((d) => ({ id: d.id, ...d.data() }) as Conversation)
+      // Sort client-side by lastMessageAt descending, nulls last
+      .sort((a, b) => {
+        const aTime = a.lastMessageAt?.toMillis() ?? 0;
+        const bTime = b.lastMessageAt?.toMillis() ?? 0;
+        return bTime - aTime;
+      });
     callback(conversations);
   });
 }
